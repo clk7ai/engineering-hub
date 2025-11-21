@@ -111,6 +111,130 @@ app.post('/api/articles', (req, res) => {
   res.json({ message: 'Article created', data: req.body });
 });
 
+// In-memory storage for aggregated articles
+let aggregatedArticles = [];
+let scraperStatus = {
+  isRunning: false,
+  lastScrapeTime: null,
+  totalArticlesAdded: 0,
+  lastError: null
+};
+
+// POST endpoint for receiving scraped articles from frontend
+app.post('/api/articles/aggregate', (req, res) => {
+  const { articles } = req.body;
+  
+  if (!Array.isArray(articles)) {
+    return res.status(400).json({ error: 'Articles must be an array' });
+  }
+  
+  try {
+    let addedCount = 0;
+    
+    articles.forEach(article => {
+      // Check for duplicates by title and source
+      const isDuplicate = aggregatedArticles.some(
+        existing => existing.title === article.title && existing.source === article.source
+      );
+      
+      if (!isDuplicate) {
+        // Add unique ID
+        const newArticle = {
+          id: aggregatedArticles.length + 1,
+          ...article,
+          addedAt: new Date().toISOString(),
+          isAggregated: true
+        };
+        aggregatedArticles.push(newArticle);
+        addedCount++;
+      }
+    });
+    
+    scraperStatus.totalArticlesAdded += addedCount;
+    scraperStatus.lastScrapeTime = new Date().toISOString();
+    
+    res.json({
+      message: `Successfully added ${addedCount} new articles`,
+      addedCount,
+      totalArticles: aggregatedArticles.length
+    });
+  } catch (error) {
+    scraperStatus.lastError = error.message;
+    res.status(500).json({ error: 'Failed to add articles', details: error.message });
+  }
+});
+
+// GET endpoint to check for duplicates
+app.post('/api/articles/check-duplicate', (req, res) => {
+  const { title, source } = req.body;
+  
+  const isDuplicate = aggregatedArticles.some(
+    article => article.title === title && article.source === source
+  );
+  
+  res.json({ isDuplicate });
+});
+
+// GET aggregated articles endpoint
+app.get('/api/articles/aggregated', (req, res) => {
+  const limit = req.query.limit || 50;
+  const category = req.query.category;
+  
+  let filtered = aggregatedArticles;
+  
+  if (category) {
+    filtered = aggregatedArticles.filter(a => a.category === category);
+  }
+  
+  res.json({
+    total: filtered.length,
+    articles: filtered.slice(0, limit)
+  });
+});
+
+// GET scraper status endpoint
+app.get('/api/scraper/status', (req, res) => {
+  res.json({
+    ...scraperStatus,
+    totalAggregatedArticles: aggregatedArticles.length
+  });
+});
+
+// POST endpoint to update scraper status
+app.post('/api/scraper/status', (req, res) => {
+  const { isRunning, lastError } = req.body;
+  
+  if (isRunning !== undefined) {
+    scraperStatus.isRunning = isRunning;
+  }
+  
+  if (lastError !== undefined) {
+    scraperStatus.lastError = lastError;
+  }
+  
+  scraperStatus.lastScrapeTime = new Date().toISOString();
+  
+  res.json({ message: 'Scraper status updated', status: scraperStatus });
+});
+
+// GET endpoint to retrieve aggregated articles by source
+app.get('/api/articles/by-source', (req, res) => {
+  const source = req.query.source;
+  
+  if (!source) {
+    return res.status(400).json({ error: 'Source parameter required' });
+  }
+  
+  const sourceArticles = aggregatedArticles.filter(a => a.source === source);
+  
+  res.json({
+    source,
+    count: sourceArticles.length,
+    articles: sourceArticles
+  });
+});
+
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Engineering Hub API running on port ${PORT}`);
